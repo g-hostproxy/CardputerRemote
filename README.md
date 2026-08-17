@@ -55,69 +55,55 @@ The system pairs an **M5Stack Cardputer** equipped with a **Cap LoRa-1262 GPS ha
 ### 📱 Custom App & Firmware Installation Guide
 *Tested Compatibility: Fully tested and verified on iOS 16 through iOS 26.*
 
-* **Part 1: Installing the iOS App (.ipa)**
+---
+
+### **Part 1: Installing the iOS App (`.ipa`)**
 Choose one of the methods below depending on your device setup (LiveContainer or TrollStore).
 
-Option A: LiveContainer (Non-Jailbroken / TrollStore-less)
+#### **Option A: LiveContainer (Non-Jailbroken / TrollStore-less)**
 * Download and install LiveContainer on your iOS device via AltStore, Sideloadly, or a direct signing service.
-
-* Download the custom .ipa file to your iPhone or transfer it via the Files app.
-
-* Open LiveContainer, tap the + (import) button, and select your app's .ipa file.
-
+* Download the custom `.ipa` file to your iPhone or transfer it via the Files app.
+* Open LiveContainer, tap the `+` (import) button, and select your app's `.ipa` file.
 * Launch the app from within LiveContainer.
 
-* Option B: TrollStore (Jailbroken / TrollStore-Supported Devices)
+#### **Option B: TrollStore (Jailbroken / TrollStore-Supported Devices)**
 * Open TrollStore on your jailbroken or TrollStore-compatible iOS device.
+* Tap the `+` icon in the top right corner.
+* Locate and select the custom `.ipa` file from your Files app.
+* Tap **Install**. TrollStore will install the app natively with full system integration and persistent permissions.
 
-* Tap the + icon in the top right corner.
+---
 
-* Locate and select the custom .ipa file from your Files app.
-
-* Tap Install. TrollStore will install the app natively with full system integration and persistent permissions.
-
-* **Part 2: Flashing the Cardputer Firmware (.bin or Arduino IDE)**
+### **Part 2: Flashing the Cardputer Firmware (`.bin` or Arduino IDE)**
 To get the firmware onto your Cardputer, you can use a web flasher, command-line tools, or compile and flash directly via the Arduino IDE.
 
-Option A: Using Web Flasher (Recommended & Easiest)
+#### **Option A: Using Web Flasher (Recommended & Easiest)**
 * Connect your Cardputer to your computer via a USB-C data cable.
-
 * Open a Web Serial-compatible browser (such as Google Chrome or Microsoft Edge).
+* Navigate to an ESP Web Flasher utility (e.g., `web.esphome.io` or your project's custom web flasher page).
+* Click **Connect**, select the correct serial port associated with your Cardputer, and choose your `.bin` firmware file.
+* Click **Install** and wait for the flashing process to complete.
 
-* Navigate to an ESP Web Flasher utility (e.g., web.esphome.io or your project's custom web flasher page).
-
-* Click Connect, select the correct serial port associated with your Cardputer, and choose your .bin firmware file.
-
-* Click Install and wait for the flashing process to complete.
-
-Option B: Using Arduino IDE (For Source Code & Customization)
-Download and open the Arduino IDE (v2.x recommended).
-
-Install the ESP32 board package:
-
-* Go to File > Preferences.
-
-* Add [https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json](https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json) to the Additional Boards Manager URLs field.
-
-* Go to Tools > Board > Boards Manager, search for esp32, and install version 2.0.x or higher (or the required version specified by the project).
-
-* Install required libraries (e.g., M5Cardputer, M5Unified) via Tools > Manage Libraries....
-
+#### **Option B: Using Arduino IDE (For Source Code & Customization)**
+* Download and open the Arduino IDE (v2.x recommended).
+* Install the ESP32 board package:
+  * Go to **File > Preferences**.
+  * Add `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json` to the *Additional Boards Manager URLs* field.
+  * Go to **Tools > Board > Boards Manager**, search for `esp32`, and install version 2.0.x or higher (or the required version specified by the project).
+* Install required libraries (e.g., `M5Cardputer`, `M5Unified`) via **Tools > Manage Libraries...**.
 * Connect your Cardputer via USB.
+* Select your board under **Tools > Board** (choose `M5StickC-Plus` or `ESP32-S3 Dev Module` depending on the exact target configuration) and select the correct port under **Tools > Port**.
+* Open your project sketch or load the source code, then click the **Upload** (right arrow) button to compile and flash the firmware directly.
 
-* Select your board under Tools > Board (choose M5StickC-Plus or ESP32-S3 Dev Module depending on the exact target configuration) and select the correct port under Tools > Port.
-
-* Open your project sketch or load the source code, then click the Upload (right arrow) button to compile and flash the firmware directly.
-
-Option C: Using esptool.py (Command Line)
-Ensure you have Python and esptool installed on your machine:
-* pip install esptool
-* Connect your Cardputer via USB and identify its port (e.g., /dev/tty.usbserial-* on macOS, COM3 on Windows).
-
-Run the following command to flash the firmware (replace PORT with your actual device port and update the filename as needed):
-* esptool.py --chip esp32s3 --port PORT --baud 921600 write_flash 0x0 firmware.bin
-
-Once complete, unplug the device or press the reset button on your Cardputer.
+#### **Option C: Using `esptool.py` (Command Line)**
+* Ensure you have Python and `esptool` installed on your machine:
+  ```bash
+  pip install esptool
+  * Connect your Cardputer via USB and identify its port (e.g., `/dev/tty.usbserial-*` on macOS, `COM3` on Windows).
+* Run the following command to flash the firmware (replace `PORT` with your actual device port and update the filename as needed):
+  ```bash
+  esptool.py --chip esp32s3 --port PORT --baud 921600 write_flash 0x0 firmware.bin
+* Once complete, unplug the device or press the reset button on your Cardputer.
 
 ## 📂 Project Architecture
 
