@@ -1,7 +1,9 @@
-[<div align="center">
+<div align="center">
 
 <!-- App Preview Banner -->
-<img src="https://raw.githubusercontent.com/g-hostproxy/CardputerRemote/main/Images/GithubImage.jpg" alt="Cardputer Remote Banner" width="100%">
+<a href="https://github.com/g-hostproxy/CardputerRemote/blob/main/Images/GithubImage.jpg">
+<img src="Images/GithubImage.jpg" alt="Cardputer Remote Banner" width="100%">
+</a>
 
 # ⚡ Cardputer Remote
 
@@ -61,4 +63,3 @@ The system pairs an **M5Stack Cardputer** equipped with a **Cap LoRa-1262 GPS ha
 ├── FlockDetectorView.swift            # FlockYou ALPR surveillance detection UI
 ├── NetworkDetailView.swift            # Network inspector & targeted deauth panel
 └── FileBrowserView.swift              # SD card HTML/CSV payload browser
-](https://github.com/g-hostproxy/CardputerRemote/blob/main/Images/GithubImage.jpg)
