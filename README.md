@@ -1,7 +1,7 @@
 <div align="center">
 
 <!-- App Preview Banner -->
-<img src="images/GithubImage.jpg" alt="Cardputer Remote Banner" width="100%">
+<img src="https://raw.githubusercontent.com/g-hostproxy/CardputerRemote/main/Images/GithubImage.jpg" alt="Cardputer Remote Banner" width="100%">
 
 # ⚡ Cardputer Remote
 
