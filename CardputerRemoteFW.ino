@@ -136,9 +136,9 @@ void updateCardputerScreen() {
         M5Cardputer.Display.println("Position: No Fix");
     }
 
-    M5Cardputer.Display.setTextColor(MAGENTA);
-    M5Cardputer.Display.print("Flock Hits: ");
-    M5Cardputer.Display.println(totalFlockDetections);
+    M5Cardputer.Display.setTextColor(ORANGE);
+    M5Cardputer.Display.print("EAPOL Hits: ");
+    M5Cardputer.Display.println(totalEapolHits);
     M5Cardputer.Display.setTextColor(CYAN);
     M5Cardputer.Display.print("Creds: ");
     M5Cardputer.Display.println(capturedCredsCount);
@@ -310,12 +310,23 @@ void initEapolFile(String ssid) {
 }
 
 void logToEapolCsv(String bssid, String staMac, String channel) {
+    if (currentEapolFile.length() == 0) initEapolFile(targetEapolSsid);
     File file = SD.open(currentEapolFile.c_str(), FILE_APPEND);
     if (file) {
         String row = "2026-08-17 00:00:00," + bssid + "," + staMac + "," + channel + ",EAPOL_KEY_FRAME";
         file.println(row);
         file.close();
         totalEapolHits++;
+
+        // Render immediate alert on the Cardputer display
+        M5Cardputer.Display.fillScreen(BLACK);
+        M5Cardputer.Display.setCursor(0, 0);
+        M5Cardputer.Display.setTextColor(RED);
+        M5Cardputer.Display.println("[!] EAPOL HANDSHAKE HIT!");
+        M5Cardputer.Display.setTextColor(ORANGE);
+        M5Cardputer.Display.println("BSSID: " + bssid);
+        M5Cardputer.Display.setTextColor(GREEN);
+        M5Cardputer.Display.println("Saved to SD!");
 
         if (pGlobalCharacteristic != nullptr) {
             String payload = "EAPOL_HIT:" + bssid + "|" + staMac + "|" + channel;
@@ -520,7 +531,7 @@ void setup() {
     if (sdMounted) {
         M5Cardputer.Display.println("[+] SD Card Mounted.");
         Serial.println("[SD] SD Card Mounted Successfully.");
-        setupStorageDirectories(); // Only sets up folder structure, no empty log files created on boot!
+        setupStorageDirectories(); 
     } else {
         M5Cardputer.Display.println("[!] SD Card Mount Error!");
         Serial.println("[SD ERROR] SD Card Mount Failed.");
@@ -723,7 +734,9 @@ void loop() {
     static unsigned long lastDisplayRefresh = 0;
     if (millis() - lastDisplayRefresh > 3000) {
         lastDisplayRefresh = millis();
-        updateCardputerScreen();
+        if (currentSystemMode != MODE_EAPOL) { // Don't overwrite active EAPOL alert notifications
+            updateCardputerScreen();
+        }
     }
 
     static unsigned long lastTelemetry = 0;
