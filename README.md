@@ -111,8 +111,5 @@ To get the firmware onto your Cardputer, you can use a web flasher, command-line
 ├── Cardputer_BLE_CommandCenter.ino     # Main ESP32-S3 Arduino firmware
 ├── BLEManager.swift                   # CoreBluetooth communication manager
 ├── ContentView.swift                  # Main iOS HUD, tab bar, and views
-├── ReconView.swift                    # Captive portal & airspace recon interface
-├── WardriveView.swift                 # Hardware GPS and WiGLE logging controls
-├── FlockDetectorView.swift            # FlockYou ALPR surveillance detection UI
-├── NetworkDetailView.swift            # Network inspector & targeted deauth panel
+├── TerminalView.swift                 # Main iOS HUD, tab bar, and views
 └── FileBrowserView.swift              # SD card HTML/CSV payload browser
