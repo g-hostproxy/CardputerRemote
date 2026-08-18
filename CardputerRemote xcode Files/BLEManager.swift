@@ -1,5 +1,6 @@
 import Foundation
 import CoreBluetooth
+import UIKit
 
 struct CapturedCredential: Codable, Identifiable {
     var id = UUID()
@@ -38,6 +39,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     var centralManager: CBCentralManager!
     var connectedPeripheral: CBPeripheral?
     var targetCharacteristic: CBCharacteristic?
+    private var keepAliveTimer: Timer?
     
     @Published var isConnected = false
     @Published var isPortalActive = false
@@ -69,10 +71,31 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         super.init()
         loadPersistentCredentials()
         centralManager = CBCentralManager(delegate: self, queue: nil)
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func appDidBecomeActive() {
+        if !isConnected {
+            terminal?.append("App foregrounded. Resetting scan cycle...", type: .info)
+            startScanning()
+        }
     }
 
     func startScanning() {
         if centralManager.state == .poweredOn {
+            if centralManager.isScanning {
+                centralManager.stopScan()
+            }
             terminal?.append("Initiating automated BLE scan...", type: .info)
             centralManager.scanForPeripherals(withServices: [targetServiceUUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         }
@@ -97,18 +120,32 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         isConnected = true
         terminal?.append("Secure Handshake Verified. Connected.", type: .success)
+        startKeepAliveTimer()
         peripheral.discoverServices([targetServiceUUID])
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         isConnected = false
         isPortalActive = false
-        isWardrivingActive = false
-        isFlockActive = false
-        isDeauthActive = false
-        isEapolActive = false
-        terminal?.append("Disconnected. Retrying scan...", type: .warning)
+        stopKeepAliveTimer()
+        terminal?.append("Disconnected. Retrying scan & reconnect...", type: .warning)
+        
+        connectedPeripheral = nil
         startScanning()
+    }
+
+    private func startKeepAliveTimer() {
+        stopKeepAliveTimer()
+        DispatchQueue.main.async {
+            self.keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+                self?.sendCommand("PING")
+            }
+        }
+    }
+
+    private func stopKeepAliveTimer() {
+        keepAliveTimer?.invalidate()
+        keepAliveTimer = nil
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
@@ -135,6 +172,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard let data = characteristic.value, let rawMessage = String(data: data, encoding: .utf8) else { return }
         
         let message = rawMessage.components(separatedBy: CharacterSet.controlCharacters).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        if message == "PONG" { return }
+        
         terminal?.append(message, type: .rx)
         
         if message.hasPrefix("SD_FILE:") {
@@ -228,7 +267,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func sendCommand(_ command: String) {
         guard let peripheral = connectedPeripheral, let characteristic = targetCharacteristic, let data = command.data(using: .utf8) else { return }
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
-        terminal?.append(command, type: .tx)
+        if command != "PING" {
+            terminal?.append(command, type: .tx)
+        }
     }
 
     func toggleWardriving(active: Bool) {
