@@ -75,7 +75,7 @@ Choose one of the methods below depending on your device setup (LiveContainer or
 ---
 
 ### **Part 2: Flashing the Cardputer Firmware (`.bin` or Arduino IDE)**
-To get the firmware onto your Cardputer, you can use a web flasher, command-line tools, or compile and flash directly via the Arduino IDE.
+To get the firmware onto your Cardputer, you can use a web flasher, M5Burner, command-line tools, or compile and flash directly via the Arduino IDE.
 
 #### **Option A: Using Web Flasher (Recommended & Easiest)**
 * Connect your Cardputer to your computer via a USB-C data cable.
